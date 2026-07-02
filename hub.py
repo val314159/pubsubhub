@@ -96,6 +96,7 @@ class MemoryAuth:
         self.sessions = {}
 
     def register(self, email, digest):
+        print("MEMORY AUTH REGISTER")
         if not email or not digest:
             return {'status': 'error', 'error': 'email and digest are required'}
         if email in self.users:
@@ -110,6 +111,7 @@ class MemoryAuth:
         return {'status': 'ok', 'user_id': user_id}
 
     def login(self, email, digest, device_id=None):
+        print("MEMORY AUTH LOGIN")
         user = self.users.get(email)
         if not user or not secrets.compare_digest(user['digest'], digest or ''):
             return {'status': 'error', 'error': 'invalid email or password'}
@@ -127,14 +129,17 @@ class MemoryAuth:
         }
 
     def logout(self, session_token):
+        print("MEMORY AUTH LOGOUT")
         self.sessions.pop(session_token, None)
         return {'status': 'ok'}
 
     def validate_session(self, session_token):
+        print("MEMORY AUTH VALIDATE")
         session = self.sessions.get(session_token)
         return session['user_id'] if session else None
 
     def get_auth_status(self, session_token, device_id=None):
+        print("MEMORY AUTH STATUS")
         session = self.sessions.get(session_token)
         if not session:
             return {'logged_in': False, 'device_id': device_id}
@@ -147,6 +152,7 @@ class MemoryAuth:
         }
 
     def get_or_create_last_conversation_locked(self, user_id):
+        print("MEMORY AUTH GET OR CREATE")
         return None
 
 
@@ -333,7 +339,7 @@ class PubSub(Bottle):
         gevent.spawn(drain)
         svr.start()
         logger.debug("Bound to %s %s!", svr.socket.getsockname()[:2])
-        ready_path = write_pid_file('pubsubhub.ready')
+        ready_path = write_pid_file('pubsub.ready')
         logger.info("Saved %s", ready_path)
         svr.serve_forever()
         return
