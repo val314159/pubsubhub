@@ -333,7 +333,7 @@ class PubSub(Bottle):
         gevent.spawn(drain)
         svr.start()
         logger.debug("Bound to %s %s!", svr.socket.getsockname()[:2])
-        ready_path = write_pid_file(basename(__file__)+'.ready')
+        ready_path = write_pid_file('pubsubhub.ready')
         logger.info("Saved %s", ready_path)
         svr.serve_forever()
         return
