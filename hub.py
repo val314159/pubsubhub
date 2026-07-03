@@ -236,7 +236,9 @@ class PubSub(Bottle):
                 del _.Channel[name]
 
     def pub_raw(_, ws, channel, raw, raw2=''):
-        logger.info("PUB RAW channel=%s raw=%s raw2=%s", channel, raw, raw2)
+        sraw = str(raw)[:256]
+        sraw2 = str(raw2)[:256]
+        logger.info("PUB RAW channel=%s raw=%s raw2=%s", channel, sraw, sraw2)
         if channel.endswith('::'):
             short_channel = channel
             session_id = _.Sessions.get(ws)
@@ -289,10 +291,12 @@ class PubSub(Bottle):
         channels = request.query.getall('c')
         try:
             _.subscribe(ws, channels)
+            convo = request.app.auth.get_or_create_last_conversation_locked(uuid)
             ws.send(json.dumps({
                 'method': 'initialize',
                 'params': {
                     'uuid': uuid,
+                    'conversation': convo.get('id'),
                     'channels': channels,
                     'session_id': session_id
                 }
@@ -426,18 +430,10 @@ def _():
     data = request.json or {}
     email = data.get('email')
     digest = data.get('digest')
-    create_convo = data.get('create_convo')
-    if create_convo is None:
-        create_convo = not data.get('no_create_user', False)
+    create_convo = not data.get('no_create_user', False)
     result = request.app.auth.register(email, digest)
     if result.get('status') == 'ok' and create_convo:
-        get_or_create = getattr(
-            request.app.auth,
-            'get_or_create_last_conversation_locked',
-            None,
-        )
-        if get_or_create:
-            get_or_create(result['user_id'])
+        request.app.auth.get_or_create_last_conversation_locked(result['user_id'])
     return result
 
 @app.get('/auth/login.html')
@@ -486,6 +482,7 @@ def main(argv=None):
         args, '--port', 'PUBSUBHUB_PORT', 'PORT', default='5002'
     )
     root = option_value(args, '--root', 'PUBSUBHUB_ROOT', 'ROOT')
+    print("ROOT", root)
     auth_plugin = option_value(
         args,
         '--auth-plugin',
