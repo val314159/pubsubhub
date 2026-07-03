@@ -28,6 +28,7 @@ Options:
 from gevent import monkey as _;_.patch_all()
 import importlib
 import json
+import orjson
 import logging
 import os
 import secrets
@@ -44,6 +45,14 @@ from pidwatcher import PidFileWatcher, write_pid_file, basename
 
 
 logger = logging.getLogger(Path(__file__).resolve().parent.stem)
+
+
+telemetry_log = open('./telemetry.log', 'a+')
+
+
+def tprint(*a, **kw):
+    #return print(*a, **kw, file=telemetry_log)
+    return print(*a, **kw, file=telemetry_log, flush=True)
 
 
 def first_env(*names):
@@ -238,7 +247,9 @@ class PubSub(Bottle):
     def pub_raw(_, ws, channel, raw, raw2=''):
         sraw = str(raw)[:256]
         sraw2 = str(raw2)[:256]
-        logger.info("PUB RAW channel=%s raw=%s raw2=%s", channel, sraw, sraw2)
+        #logger.info("PUB RAW channel=%s raw=%s raw2=%s", channel, sraw, sraw2)
+        _.T.put((channel, raw, raw2))
+        # this doesnt work: _.T.put((channel, raw, raw2))
         if channel.endswith('::'):
             short_channel = channel
             session_id = _.Sessions.get(ws)
@@ -251,35 +262,26 @@ class PubSub(Bottle):
             session_id = None
             wire_channel = ''
             pass
-        def send_raw(explicit_channel=''):
-            if explicit_channel:
-                ws2.send(explicit_channel)
-                pass
-            if channel.startswith('*'):
-                if not explicit_channel:
-                    ws2.send(channel)
-                    pass
-                ws2.send(raw)
-                ws2.send(raw2)
-            elif channel.startswith('+'):
-                if not explicit_channel:
-                    ws2.send(channel)
-                    pass
-                ws2.send(raw)
-            else:
-                ws2.send(raw)
-                pass
-            return
+        if channel[0] in '*+':
+            wire_channel = channel
+            pass
         for _wsid2, ws2 in _.Channel.get(short_channel,[]):
             if ws == ws2:
                 logger.debug("Skipping raw publish back to sender")
-            elif wire_channel:
-                send_raw(wire_channel)
-            elif not session_id:
-                # No session filter, publish to all
-                send_raw()
-            elif _.Sessions.get(ws2) == session_id:
-                send_raw()
+                continue
+            if  (  wire_channel or
+                   not session_id or # No session filter, publish to all
+                   _.Sessions.get(ws2) == session_id  ):
+                if wire_channel:
+                    ws2.send(wire_channel)
+                    pass
+                ws2.send(raw)
+                if channel.startswith('*'):
+                    ws2.send(raw2)
+                    pass
+                pass
+            pass
+        pass
 
     def add_session(_, ws, session_id):
         _.Sessions[ws] = session_id
@@ -332,15 +334,56 @@ class PubSub(Bottle):
         logger.info("Websocket disconnected")
         pass
 
+    def drain(_):
+        while 1:
+            _.pub_raw(*_.Q.get())
+            
+    def tdrain(_):
+        tprint(">> Telemetry started...")
+        while 1:
+            args = _.T.get()
+            channel, raw, raw2 = args
+            if type(raw) == bytearray:
+                raw = repr(raw[:32])+'...'
+            else:
+                cooked = orjson.loads(raw)
+                if cooked.get('method') == 'pub':
+                    cooked = cooked.get('params')
+                    pass  
+                if cooked.get('role'):
+                    if cooked.get('role') == 'assistant':
+                        cooked['role'] = 'asst'
+                        pass
+                    if 'done' in cooked:
+                        cooked['done'] = int(cooked['done'])
+                    if 'round_done' in cooked:
+                        cooked['round_done'] = int(cooked['round_done'])
+                    if 'content' in cooked:
+                        content = cooked.pop('content')
+                        cooked['content'] = content
+                        pass
+                    if 'from_' in cooked:
+                        from_ = cooked.pop('from_')
+                        cooked['from_'] = from_
+                        pass
+                cooked.pop('session_id', '')
+                cooked.pop('turn_id', '')
+                cooked.pop('conversation', '')
+                cooked.pop('channel', '')
+                cooked.pop('uuid', '')
+                raw = orjson.dumps(cooked).decode()
+            if type(raw2) == bytearray:
+                raw2 = repr(raw2[:32])+'...'
+            tprint(f"{channel:<20.20}--{str(raw)}--{str(raw2)}")
+
     def run(_, host='127.0.0.1', port=5002):
         _.Q = gevent.queue.Queue()
-        def drain():
-            while 1:
-                _.pub_raw(*_.Q.get())
+        _.T = gevent.queue.Queue()
         logger.info("Serving static assets from %s", _.public_root)
         logger.info("Starting server with gevent on http://%s:%s!", host, port)
         svr = WebSocketServer((host, port), _, log=None)
-        gevent.spawn(drain)
+        gevent.spawn(_.drain)
+        gevent.spawn(_.tdrain)
         svr.start()
         logger.debug("Bound to %s %s!", svr.socket.getsockname()[:2])
         ready_path = write_pid_file('pubsub.ready')
